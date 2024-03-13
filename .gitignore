@@ -8,3 +8,5 @@ model_generic_xseg/
 pretrain_faces/
 
 pretrain_Quick96/
+
+*.pyc

@@ -137,7 +137,7 @@ Examples: df, liae, df-d, df-ud, liae-ud, ...
                 self.options['masked_training']  = io.input_bool ("训练遮罩 Masked training", default_masked_training, help_message="This option is available only for 'whole_face' or 'head' type. Masked training clips training area to full_face mask or XSeg mask, thus network will train the faces properly.")
 
             self.options['eyes_mouth_prio'] = io.input_bool ("眼睛和嘴巴优先 Eyes and mouth priority", default_eyes_mouth_prio, help_message='Helps to fix eye problems during training like "alien eyes" and wrong eyes direction. Also makes the detail of the teeth higher.')
-            self.options['uniform_yaw'] = io.input_bool ("侧脸优化 Uniform yaw distribution of samples", default_uniform_yaw, help_message='Helps to fix blurry side faces due to small amount of them in the faceset.')
+            self.options['uniform_yaw'] = io.input_bool ("侧脸和上下脸优化 Uniform yaw distribution of samples", default_uniform_yaw, help_message='Helps to fix blurry side faces due to small amount of them in the faceset.')
             self.options['blur_out_mask'] = io.input_bool ("遮罩边缘模糊 Blur out mask", default_blur_out_mask, help_message='Blurs nearby area outside of applied face mask of training samples. The result is the background near the face is smoothed and less noticeable on swapped face. The exact xseg mask in src and dst faceset is required.')
 
         default_gan_power          = self.options['gan_power']          = self.load_or_def_option('gan_power', 0.0)

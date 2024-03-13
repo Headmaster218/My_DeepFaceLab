@@ -73,7 +73,7 @@ class AMPModel(ModelBase):
             self.options['morph_factor'] = morph_factor
 
         if self.is_first_run() or ask_override:
-            self.options['uniform_yaw'] = io.input_bool ("侧脸优化 Uniform yaw distribution of samples", default_uniform_yaw, help_message='Helps to fix blurry side faces due to small amount of them in the faceset.')
+            self.options['uniform_yaw'] = io.input_bool ("侧脸和上下脸优化 Uniform yaw distribution of samples", default_uniform_yaw, help_message='Helps to fix blurry side faces due to small amount of them in the faceset.')
             self.options['blur_out_mask'] = io.input_bool ("遮罩边缘模糊 Blur out mask", default_blur_out_mask, help_message='Blurs nearby area outside of applied face mask of training samples. The result is the background near the face is smoothed and less noticeable on swapped face. The exact xseg mask in src and dst faceset is required.')
             self.options['lr_dropout']  = io.input_str (f"使用学习率dropout Use learning rate dropout", default_lr_dropout, ['n','y','cpu'], help_message="When the face is trained enough, you can enable this option to get extra sharpness and reduce subpixel shake for less amount of iterations. Enabled it before `disable random warp` and before GAN. \nn - disabled.\ny - enabled\ncpu - enabled on CPU. This allows not to use extra VRAM, sacrificing 20% time of iteration.")
 
