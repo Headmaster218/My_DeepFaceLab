@@ -125,50 +125,150 @@ def sort_by_motion_blur(input_path):
 
     return img_list, trash_img_list
 
-def make_angle_draft(input_path):
-    io.log_info("Making draft...")
+def process_image(filepath, angle_distribution):
+    filepath = Path(filepath)
+    dflimg = DFLIMG.load(filepath)
 
-    # 初始化角度分布数组为10x10网格
+    if dflimg is None or not dflimg.has_data():
+        io.log_err(f"{filepath.name} 不符合DFL规范")
+        return None
+
+    pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
+    pitch_deg = np.degrees(pitch)
+    yaw_deg = np.degrees(yaw)
+    pitch_idx = int((pitch_deg + 90) / 180 * 19)
+    yaw_idx = int((yaw_deg + 90) / 180 * 19)
+
+    # 更新角度分布数组
+    angle_distribution[pitch_idx, yaw_idx] += 1
+    return angle_distribution
+
+def make_angle_draft_by_paths(img_paths):
+    io.log_info("Sorting by face yaw from list...")
+
     angle_distribution = np.zeros((20, 20), np.int32)
-    max_count = 1
 
-    for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Loading"):
-        filepath = Path(filepath)
+    for filepath in io.progress_bar_generator(img_paths, "Loading"):
+        angle_distribution = process_image(filepath, angle_distribution)
 
-        dflimg = DFLIMG.load(filepath)
+    max_count = np.max(angle_distribution)
+    show_angle_distribution(angle_distribution, max_count)
 
-        if dflimg is None or not dflimg.has_data():
-            io.log_err(f"{filepath.name} 不符合DFL规范")
-            continue
+def make_angle_draft_by_folder(input_path):
+    io.log_info("Sorting by face yaw from folder...")
 
-        pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
+    img_paths = pathex.get_image_paths(input_path)
+    make_angle_draft_by_paths(img_paths)
 
-        # 将弧度转换为度数，并映射到10x10网格的索引
-        pitch_deg = np.degrees(pitch)
-        yaw_deg = np.degrees(yaw)
-        pitch_idx = int((pitch_deg + 90) / 180 * 19)  # 映射到0-9的索引
-        yaw_idx = int((yaw_deg + 90) / 180 * 19)  # 映射到0-9的索引
-
-        # 更新角度分布数组和最大计数
-        angle_distribution[pitch_idx, yaw_idx] += 1
-        max_count = max(max_count, angle_distribution[pitch_idx, yaw_idx])
-
-    # 将计数转换为亮度值，并将图像大小调整为300x300
-    # 使用对数映射来增强亮度比例
-    # 避免对0取对数，对所有值加1后取对数
+def show_angle_distribution(angle_distribution, max_count):
     log_distribution = np.log1p(angle_distribution)
-
-    # 归一化到[0, 1]
     normalized_log_distribution = (log_distribution - np.min(log_distribution)) / (np.max(log_distribution) - np.min(log_distribution))
-
-    # 线性映射到[0, 255]的灰度值
     image = (normalized_log_distribution * 255).astype(np.uint8)
     image_resized = cv2.resize(image, (700, 700), interpolation=cv2.INTER_NEAREST)
 
-    # 显示结果
     cv2.imshow("Angle Distribution", image_resized)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+
+# def make_angle_draft(input_path):
+#     io.log_info("Making draft...")
+
+#     # 初始化角度分布数组为10x10网格
+#     angle_distribution = np.zeros((20, 20), np.int32)
+#     max_count = 1
+
+#     for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Loading"):
+# def make_angle_draft_by_paths(img_paths):
+#     io.log_info("Sorting by face yaw from list...")
+
+#     # 假设以下变量和逻辑已经定义：
+#     angle_distribution = np.zeros((20, 20), np.int32)  # 示例初始化
+#     max_count = 1
+
+#     # 处理传入的图片路径列表
+#     for filepath in io.progress_bar_generator(img_paths, "Loading"):
+#         filepath = Path(filepath)
+
+#         dflimg = DFLIMG.load(filepath)
+
+#         if dflimg is None or not dflimg.has_data():
+#             io.log_err(f"{filepath.name} 不符合DFL规范")
+#             continue
+
+#         pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
+
+#         # 将弧度转换为度数，并映射到10x10网格的索引
+#         pitch_deg = np.degrees(pitch)
+#         yaw_deg = np.degrees(yaw)
+#         pitch_idx = int((pitch_deg + 90) / 180 * 19)  # 映射到0-9的索引
+#         yaw_idx = int((yaw_deg + 90) / 180 * 19)  # 映射到0-9的索引
+
+#         # 更新角度分布数组和最大计数
+#         angle_distribution[pitch_idx, yaw_idx] += 1
+#         max_count = max(max_count, angle_distribution[pitch_idx, yaw_idx])
+
+#     # 将计数转换为亮度值，并将图像大小调整为300x300
+#     # 使用对数映射来增强亮度比例
+#     # 避免对0取对数，对所有值加1后取对数
+#     log_distribution = np.log1p(angle_distribution)
+
+#     # 归一化到[0, 1]
+#     normalized_log_distribution = (log_distribution - np.min(log_distribution)) / (np.max(log_distribution) - np.min(log_distribution))
+
+#     # 线性映射到[0, 255]的灰度值
+#     image = (normalized_log_distribution * 255).astype(np.uint8)
+#     image_resized = cv2.resize(image, (700, 700), interpolation=cv2.INTER_NEAREST)
+
+#     # 显示结果
+#     cv2.imshow("Angle Distribution", image_resized)
+#     cv2.waitKey(0)
+#     cv2.destroyAllWindows()
+
+
+
+def find_n_best_faces(input_path):
+    io.log_info("Analyzing face angles...")
+
+    img_list = []
+    trash_img_list = []
+    angle_distribution = {}
+    n_best = 1200
+
+    for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Processing"):
+        filepath = Path(filepath)
+        dflimg = DFLIMG.load(filepath)
+
+        if dflimg is None or not dflimg.has_data():
+            io.log_err(f"{filepath.name} does not meet DFL standard")
+            trash_img_list.append(str(filepath))
+            continue
+
+        pitch, yaw, _ = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
+        pitch_deg = int(np.degrees(pitch))
+        yaw_deg = int(np.degrees(yaw))
+
+        # 分类角度，简化为每10度一个区间
+        pitch_bin = pitch_deg // 10
+        yaw_bin = yaw_deg // 10
+        bin_key = (pitch_bin, yaw_bin)
+
+        if bin_key not in angle_distribution:
+            angle_distribution[bin_key] = []
+        angle_distribution[bin_key].append(filepath)
+
+    # 尽量均匀选取图片
+    while len(img_list) < n_best and angle_distribution:
+        for bin_key in list(angle_distribution.keys()):
+            if angle_distribution[bin_key]:
+                img_list.append(angle_distribution[bin_key].pop(0))
+                if len(img_list) == n_best:
+                    break
+            else:
+                del angle_distribution[bin_key]
+    make_angle_draft_by_paths(img_list)
+    # return img_list, trash_img_list
+
 
 
 def sort_by_face_yaw(input_path):
@@ -957,7 +1057,8 @@ sort_func_methods = {
     'absdiff':     ("绝对像素差 absolute pixel difference", sort_by_absdiff),
     'final':       ("综合筛选 best faces", sort_best),
     'final-fast':  ("综合筛选 快速best faces faster", sort_best_faster),
-    'make-angle-draft':  ("绘制人脸角度分布图", make_angle_draft)
+    'make-angle-draft':  ("绘制人脸角度分布图", make_angle_draft_by_folder),
+    'find-n-best': ("根据角度和模糊程度找到最好的n张脸", find_n_best_faces)
 }
 
 def main (input_path, sort_by_method=None):
