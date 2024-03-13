@@ -124,7 +124,53 @@ def sort_by_motion_blur(input_path):
     img_list = sorted(img_list, key=operator.itemgetter(1), reverse=True)
 
     return img_list, trash_img_list
-    
+
+def make_angle_draft(input_path):
+    io.log_info("Making draft...")
+
+    # 初始化角度分布数组为10x10网格
+    angle_distribution = np.zeros((20, 20), np.int32)
+    max_count = 1
+
+    for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Loading"):
+        filepath = Path(filepath)
+
+        dflimg = DFLIMG.load(filepath)
+
+        if dflimg is None or not dflimg.has_data():
+            io.log_err(f"{filepath.name} 不符合DFL规范")
+            continue
+
+        pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
+
+        # 将弧度转换为度数，并映射到10x10网格的索引
+        pitch_deg = np.degrees(pitch)
+        yaw_deg = np.degrees(yaw)
+        pitch_idx = int((pitch_deg + 90) / 180 * 19)  # 映射到0-9的索引
+        yaw_idx = int((yaw_deg + 90) / 180 * 19)  # 映射到0-9的索引
+
+        # 更新角度分布数组和最大计数
+        angle_distribution[pitch_idx, yaw_idx] += 1
+        max_count = max(max_count, angle_distribution[pitch_idx, yaw_idx])
+
+    # 将计数转换为亮度值，并将图像大小调整为300x300
+    # 使用对数映射来增强亮度比例
+    # 避免对0取对数，对所有值加1后取对数
+    log_distribution = np.log1p(angle_distribution)
+
+    # 归一化到[0, 1]
+    normalized_log_distribution = (log_distribution - np.min(log_distribution)) / (np.max(log_distribution) - np.min(log_distribution))
+
+    # 线性映射到[0, 255]的灰度值
+    image = (normalized_log_distribution * 255).astype(np.uint8)
+    image_resized = cv2.resize(image, (700, 700), interpolation=cv2.INTER_NEAREST)
+
+    # 显示结果
+    cv2.imshow("Angle Distribution", image_resized)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
 def sort_by_face_yaw(input_path):
     io.log_info ("Sorting by face yaw...")
     img_list = []
@@ -911,6 +957,7 @@ sort_func_methods = {
     'absdiff':     ("绝对像素差 absolute pixel difference", sort_by_absdiff),
     'final':       ("综合筛选 best faces", sort_best),
     'final-fast':  ("综合筛选 快速best faces faster", sort_best_faster),
+    'make-angle-draft':  ("绘制人脸角度分布图", make_angle_draft)
 }
 
 def main (input_path, sort_by_method=None):
