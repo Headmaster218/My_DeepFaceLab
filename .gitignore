@@ -10,3 +10,4 @@ pretrain_faces/
 pretrain_Quick96/
 
 *.pyc
+DeepFaceLab/start.pyd

@@ -1,4 +1,4 @@
-import math
+﻿import math
 import multiprocessing
 import operator
 import os
@@ -28,26 +28,36 @@ class BlurEstimatorSubprocessor(Subprocessor):
         
         #override
         def process_data(self, data):
-            filepath = Path( data[0] )
-            dflimg = DFLIMG.load (filepath)
-
+            filepath = Path(data[0])
+            dflimg = DFLIMG.load(filepath)
+            
             if dflimg is None or not dflimg.has_data():
-                self.log_err (f"{filepath.name} 不符合DFL规范")
-                return [ str(filepath), 0 ]
+                self.log_err(f"{filepath.name} 不符合DFL规范")
+                return [str(filepath), 0]
             else:
-                image = cv2_imread( str(filepath) )
+                image = cv2_imread(str(filepath))
+                xseg_mask = dflimg.get_xseg_mask()
                 
-                face_mask = LandmarksProcessor.get_image_hull_mask (image.shape, dflimg.get_landmarks())
-                image = (image*face_mask).astype(np.uint8)
-                
+                if xseg_mask is not None:
+                    # 调整XSeg遮罩尺寸以匹配图像尺寸
+                    xseg_mask_resized = cv2.resize(xseg_mask, (image.shape[1], image.shape[0]))
+                    # 确保遮罩和图像在通道数上一致
+                    xseg_mask_resized = np.repeat(xseg_mask_resized[..., np.newaxis], 3, axis=2)
+                    image = (image * xseg_mask_resized).astype(np.uint8)
+                else:
+                    # 如果没有XSeg遮罩，使用备选方法
+                    face_mask = LandmarksProcessor.get_image_hull_mask(image.shape, dflimg.get_landmarks())
+                    image = (image * face_mask).astype(np.uint8)
                 
                 if self.estimate_motion_blur:
                     value = cv2.Laplacian(image, cv2.CV_64F, ksize=11).var()    
                 else:
+                    # 对人脸区域应用高斯模糊后再评估模糊度
+                    # smoothed = cv2.GaussianBlur(image, (3, 3), 0)
+                    # value = cv2.Laplacian(smoothed, cv2.CV_64F).var()
                     value = estimate_sharpness(image)
                 
-                return [ str(filepath), value ]
-
+                return [str(filepath), value]
 
         #override
         def get_data_name (self, data):
