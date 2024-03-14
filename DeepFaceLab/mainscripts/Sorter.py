@@ -1,4 +1,4 @@
-﻿import math
+import math
 import multiprocessing
 import operator
 import os
@@ -161,70 +161,77 @@ def make_angle_draft_by_folder(input_path):
     make_angle_draft_by_paths(img_paths)
 
 def show_angle_distribution(angle_distribution, max_count):
+    # 对角度分布应用对数映射和归一化
     log_distribution = np.log1p(angle_distribution)
     normalized_log_distribution = (log_distribution - np.min(log_distribution)) / (np.max(log_distribution) - np.min(log_distribution))
     image = (normalized_log_distribution * 255).astype(np.uint8)
     image_resized = cv2.resize(image, (700, 700), interpolation=cv2.INTER_NEAREST)
 
+    # 计算每个色块的大小
+    block_size = 700 // angle_distribution.shape[0]  # 假设图像是正方形，且angle_distribution也是正方形
+
+    for i in range(angle_distribution.shape[0]):
+        for j in range(angle_distribution.shape[1]):
+            # 计算每个色块的中心位置
+            center_x = j * block_size + block_size // 2
+            center_y = i * block_size + block_size // 2
+
+
+            pitch_angle = i*10-90
+            yaw_angle = j*10-90
+
+            # 在色块上叠加角度值
+            # 将文本分成两部分
+            text_line1 = f"{pitch_angle:.1f}"
+            text_line2 = f"{yaw_angle:.1f}"
+
+            # 绘制第一行文本
+            cv2.putText(image_resized, text_line1, (center_x - 20, center_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1, cv2.LINE_AA)
+
+            # 计算第二行文本的位置
+            (text_width, text_height), _ = cv2.getTextSize(text_line1, cv2.FONT_HERSHEY_SIMPLEX, 0.3, 1)
+            baseline = text_height + 5  # 加一些间隔
+            text_origin_y = center_y + baseline
+
+            # 绘制第二行文本
+            cv2.putText(image_resized, text_line2, (center_x - 20, text_origin_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1, cv2.LINE_AA)
+
+
     cv2.imshow("Angle Distribution", image_resized)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
+def find_by_pitch(input_path):
+    upper_bound = float(input("请输入上限角度(额头)（0到90之间）："))
+    lower_bound = float(input("请输入下限角度(下巴)（0到90之间）："))
 
-# def make_angle_draft(input_path):
-#     io.log_info("Making draft...")
+    lower_bound_rad = np.radians(lower_bound)
+    upper_bound_rad = np.radians(upper_bound)
 
-#     # 初始化角度分布数组为10x10网格
-#     angle_distribution = np.zeros((20, 20), np.int32)
-#     max_count = 1
+    img_list = []
+    trash_img_list = []
 
-#     for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Loading"):
-# def make_angle_draft_by_paths(img_paths):
-#     io.log_info("Sorting by face yaw from list...")
+    io.log_info(f"正在舍弃pitch在{upper_bound}，{lower_bound}]度之间的图片...")
 
-#     # 假设以下变量和逻辑已经定义：
-#     angle_distribution = np.zeros((20, 20), np.int32)  # 示例初始化
-#     max_count = 1
+    for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Loading"):
+        filepath = Path(filepath)
+        dflimg = DFLIMG.load(filepath)
 
-#     # 处理传入的图片路径列表
-#     for filepath in io.progress_bar_generator(img_paths, "Loading"):
-#         filepath = Path(filepath)
+        if dflimg is None or not dflimg.has_data():
+            io.log_err(f"{filepath.name} 不符合DFL规范")
+            trash_img_list.append([str(filepath)])  # 确保以列表的形式添加
+            continue
 
-#         dflimg = DFLIMG.load(filepath)
+        pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
 
-#         if dflimg is None or not dflimg.has_data():
-#             io.log_err(f"{filepath.name} 不符合DFL规范")
-#             continue
+        if pitch > 0 and pitch <= lower_bound_rad or pitch < 0 and abs(pitch) <= upper_bound_rad:
+            img_list.append([str(filepath)])  # 确保以列表的形式添加
+        else:
+            trash_img_list.append([str(filepath)])  # 确保以列表的形式添加
 
-#         pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
-
-#         # 将弧度转换为度数，并映射到10x10网格的索引
-#         pitch_deg = np.degrees(pitch)
-#         yaw_deg = np.degrees(yaw)
-#         pitch_idx = int((pitch_deg + 90) / 180 * 19)  # 映射到0-9的索引
-#         yaw_idx = int((yaw_deg + 90) / 180 * 19)  # 映射到0-9的索引
-
-#         # 更新角度分布数组和最大计数
-#         angle_distribution[pitch_idx, yaw_idx] += 1
-#         max_count = max(max_count, angle_distribution[pitch_idx, yaw_idx])
-
-#     # 将计数转换为亮度值，并将图像大小调整为300x300
-#     # 使用对数映射来增强亮度比例
-#     # 避免对0取对数，对所有值加1后取对数
-#     log_distribution = np.log1p(angle_distribution)
-
-#     # 归一化到[0, 1]
-#     normalized_log_distribution = (log_distribution - np.min(log_distribution)) / (np.max(log_distribution) - np.min(log_distribution))
-
-#     # 线性映射到[0, 255]的灰度值
-#     image = (normalized_log_distribution * 255).astype(np.uint8)
-#     image_resized = cv2.resize(image, (700, 700), interpolation=cv2.INTER_NEAREST)
-
-#     # 显示结果
-#     cv2.imshow("Angle Distribution", image_resized)
-#     cv2.waitKey(0)
-#     cv2.destroyAllWindows()
-
+    return trash_img_list,img_list#将筛选出来的中间的丢弃
 
 
 def find_n_best_faces(input_path):
@@ -233,7 +240,7 @@ def find_n_best_faces(input_path):
     img_list = []
     trash_img_list = []
     angle_distribution = {}
-    n_best = 1200
+    n_best = int(input("要多少张？"))
 
     for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Processing"):
         filepath = Path(filepath)
@@ -1053,12 +1060,13 @@ sort_func_methods = {
     'hue':         ("色调 hue", sort_by_hue),
     'black':       ("黑色像素数量 amount of black pixels", sort_by_black),
     'origname':    ("源文件名 original filename", sort_by_origname),
-    'oneface':     ("图像中的一张脸 one face in image", sort_by_oneface_in_image),
+    'oneface':     ("图像中是否只有一张脸 one face in image", sort_by_oneface_in_image),
     'absdiff':     ("绝对像素差 absolute pixel difference", sort_by_absdiff),
     'final':       ("综合筛选 best faces", sort_best),
     'final-fast':  ("综合筛选 快速best faces faster", sort_best_faster),
     'make-angle-draft':  ("绘制人脸角度分布图", make_angle_draft_by_folder),
-    'find-n-best': ("根据角度和模糊程度找到最好的n张脸", find_n_best_faces)
+    'find-n-best': ("根据角度和模糊程度找到最好的n张脸", find_n_best_faces),
+    'find-by-pitch':("丢弃中间a~b角度的脸", find_by_pitch)
 }
 
 def main (input_path, sort_by_method=None):
