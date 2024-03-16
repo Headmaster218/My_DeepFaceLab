@@ -1,4 +1,4 @@
-﻿import traceback
+import traceback
 import math
 import multiprocessing
 import operator
@@ -51,6 +51,7 @@ class ExtractSubprocessor(Subprocessor):
             self.cpu_only             = client_dict['device_type'] == 'CPU'
             self.final_output_path    = client_dict['final_output_path']
             self.output_debug_path    = client_dict['output_debug_path']
+            self.big_angle_only       = client_dict['big_angle_only']
 
             #transfer and set stdin in order to work code.interact in debug subprocess
             stdin_fd         = client_dict['stdin_fd']
@@ -119,6 +120,7 @@ class ExtractSubprocessor(Subprocessor):
                                                            jpeg_quality=self.jpeg_quality,
                                                            output_debug_path=self.output_debug_path,
                                                            final_output_path=self.final_output_path,
+                                                           big_angle_only=self.big_angle_only
                                                            )
             return data
 
@@ -203,6 +205,7 @@ class ExtractSubprocessor(Subprocessor):
                         jpeg_quality,
                         output_debug_path=None,
                         final_output_path=None,
+                        big_angle_only = False,
                         ):
             data.final_output_files = []
             filepath = data.filepath
@@ -223,10 +226,25 @@ class ExtractSubprocessor(Subprocessor):
                     image_to_face_mat = None
                     face_image = image
                     face_image_landmarks = image_landmarks
-                else:
-                    image_to_face_mat = LandmarksProcessor.get_transform_mat (image_landmarks, image_size, face_type)
+                else:                
 
+
+                    image_to_face_mat = LandmarksProcessor.get_transform_mat (image_landmarks, image_size, face_type)
                     face_image = cv2.warpAffine(image, image_to_face_mat, (image_size, image_size), cv2.INTER_LANCZOS4)
+                    if big_angle_only == True:
+                            min_x = np.min(image_landmarks[:, 0])
+                            max_x = np.max(image_landmarks[:, 0])
+                            min_y = np.min(image_landmarks[:, 1])
+                            max_y = np.max(image_landmarks[:, 1])
+
+                            # 计算边界框的宽度和高度
+                            width = max_x - min_x
+                            height = max_y - min_y
+                            pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(image_landmarks, size=512)
+
+                            if abs(pitch*height)+abs(yaw*width) < 150:
+                                continue
+
                     face_image_landmarks = LandmarksProcessor.transform_points (image_landmarks, image_to_face_mat)
 
                     landmarks_bbox = LandmarksProcessor.transform_points ( [ (0,0), (0,image_size-1), (image_size-1, image_size-1), (image_size-1,0) ], image_to_face_mat, True)
@@ -304,7 +322,7 @@ class ExtractSubprocessor(Subprocessor):
         elif type == 'final':
             return [ (i, 'CPU', 'CPU%d' % (i), 0 ) for i in (range(min(8, multiprocessing.cpu_count())) if not DEBUG else [0]) ]
 
-    def __init__(self, input_data, type, image_size=None, jpeg_quality=None, face_type=None, output_debug_path=None, manual_window_size=0, max_faces_from_image=0, final_output_path=None, device_config=None):
+    def __init__(self, input_data, type, image_size=None, jpeg_quality=None, face_type=None, output_debug_path=None, manual_window_size=0, max_faces_from_image=0, final_output_path=None, device_config=None,big_angle_only=False):
         if type == 'landmarks-manual':
             for x in input_data:
                 x.manual = True
@@ -320,6 +338,7 @@ class ExtractSubprocessor(Subprocessor):
         self.manual_window_size = manual_window_size
         self.max_faces_from_image = max_faces_from_image
         self.result = []
+        self.big_angle_only = big_angle_only
 
         self.devices = ExtractSubprocessor.get_devices_for_config(self.type, device_config)
 
@@ -369,6 +388,7 @@ class ExtractSubprocessor(Subprocessor):
                      'max_faces_from_image':self.max_faces_from_image,
                      'output_debug_path': self.output_debug_path,
                      'final_output_path': self.final_output_path,
+                     'big_angle_only': self.big_angle_only,
                      'stdin_fd': sys.stdin.fileno() }
 
 
@@ -759,6 +779,12 @@ def main(detector=None,
 
     device_config = nn.DeviceConfig.GPUIndexes( force_gpu_idxs or nn.ask_choose_device_idxs(choose_only_one=detector=='manual', suggest_all_gpu=True) ) \
                     if not cpu_only else nn.DeviceConfig.CPU()
+                    
+    big_angle_only = io.input_int(f"只要大角度人脸图片", 0, valid_range=[0,1], help_message="为了提高普适性")
+    if big_angle_only == 0:
+        big_angle_only = False
+    else:
+        big_angle_only == True
 
     if face_type is None:
         face_type = io.input_str ("脸类型 Face type", 'wf', ['f','wf','head'], help_message="Full face / whole face / head. 'Whole face' covers full area of face include forehead. 'head' covers full head, but requires XSeg for src and dst faceset.").lower()
@@ -824,10 +850,10 @@ def main(detector=None,
                                          output_debug_path if output_debug else None,
                                          max_faces_from_image=max_faces_from_image,
                                          final_output_path=output_path,
-                                         device_config=device_config).run()
+                                         device_config=device_config,
+                                         big_angle_only=big_angle_only).run()
 
         faces_detected += sum([d.faces_detected for d in data])
-
         if manual_fix:
             if all ( np.array ( [ d.faces_detected > 0 for d in data] ) == True ):
                 io.log_info ('All faces are detected, manual fix not needed.')
