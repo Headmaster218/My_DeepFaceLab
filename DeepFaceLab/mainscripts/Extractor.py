@@ -231,21 +231,34 @@ class ExtractSubprocessor(Subprocessor):
 
                     image_to_face_mat = LandmarksProcessor.get_transform_mat (image_landmarks, image_size, face_type)
                     face_image = cv2.warpAffine(image, image_to_face_mat, (image_size, image_size), cv2.INTER_LANCZOS4)
-                    if big_angle_only == True:
-                            min_x = np.min(image_landmarks[:, 0])
-                            max_x = np.max(image_landmarks[:, 0])
-                            min_y = np.min(image_landmarks[:, 1])
+                    face_image_landmarks = LandmarksProcessor.transform_points (image_landmarks, image_to_face_mat)
+                    pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(face_image_landmarks, size=image_size)
+                    if abs(pitch)>70 or abs(yaw) > 70:#s3fd只能识别到75度
+                        continue
+                    min_x = np.min(image_landmarks[:, 0])
+                    max_x = np.max(image_landmarks[:, 0])
+                    min_y = np.min(image_landmarks[:, 1])
                             max_y = np.max(image_landmarks[:, 1])
 
-                            # 计算边界框的宽度和高度
-                            width = max_x - min_x
-                            height = max_y - min_y
-                            pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(image_landmarks, size=512)
-
-                            if abs(pitch*height)+abs(yaw*width) < 150:
+                    # 计算边界框的宽度和高度
+                    width = max_x - min_x
+                    height = max_y - min_y
+                    a,b,c = image.shape
+                    #误识别，大黑边的情况
+                    # print(int(width*height),int(a*b*0.4),filepath)
+                    if width*height > a*b*0.4:
+                        continue
+                    if big_angle_only == True:
+                            
+                            #尺寸小的不保留
+                            if width+height < 500:
                                 continue
-
-                    face_image_landmarks = LandmarksProcessor.transform_points (image_landmarks, image_to_face_mat)
+                            
+                            pitch = np.degrees(pitch)
+                            yaw = np.degrees(yaw)
+                            
+                            if (pitch>-35 and pitch<20):
+                                continue
 
                     landmarks_bbox = LandmarksProcessor.transform_points ( [ (0,0), (0,image_size-1), (image_size-1, image_size-1), (image_size-1,0) ], image_to_face_mat, True)
 
