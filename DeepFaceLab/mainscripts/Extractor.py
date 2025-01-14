@@ -1,4 +1,4 @@
-import traceback
+﻿import traceback
 import math
 import multiprocessing
 import operator
@@ -27,8 +27,9 @@ DEBUG = False
 
 class ExtractSubprocessor(Subprocessor):
     class Data(object):
-        def __init__(self, filepath=None, rects=None, landmarks = None, landmarks_accurate=True, manual=False, force_output_path=None, final_output_files = None):
-            self.filepath = filepath
+        def __init__(self, filepath=None, rects=None, landmarks=None, landmarks_accurate=True, manual=False, force_output_path=None, final_output_files=None, image=None):
+            self.filepath = filepath  # 文件路径，保留兼容性
+            self.image = image  # 新增，用于直接传入图片数据
             self.rects = rects or []
             self.rects_rotation = 0
             self.landmarks_accurate = landmarks_accurate
@@ -80,49 +81,45 @@ class ExtractSubprocessor(Subprocessor):
 
             self.cached_image = (None, None)
 
-        #override
+        # override
         def process_data(self, data):
             if 'landmarks' in self.type and len(data.rects) == 0:
                 return data
 
-            filepath = data.filepath
-            cached_filepath, image = self.cached_image
-            if cached_filepath != filepath:
-                image = cv2_imread( filepath )
+            if data.image is not None:
+                # 如果直接提供了图片，直接使用
+                image = data.image
                 if image is None:
-                    self.log_err (f'Failed to open {filepath}, reason: cv2_imread() fail.')
+                    self.log_err(f'Failed to open.')
                     return data
                 image = imagelib.normalize_channels(image, 3)
                 image = imagelib.cut_odd_image(image)
-                self.cached_image = ( filepath, image )
+            else:
+                # 否则从路径加载
+                filepath = data.filepath
+                cached_filepath, image = self.cached_image
+                if cached_filepath != filepath:
+                    image = cv2_imread(filepath)
+                    if image is None:
+                        self.log_err(f'Failed to open {filepath}, reason: cv2_imread() fail.')
+                        return data
+                    image = imagelib.normalize_channels(image, 3)
+                    image = imagelib.cut_odd_image(image)
+                    self.cached_image = (filepath, image)
 
             h, w, c = image.shape
 
             if 'rects' in self.type or self.type == 'all':
-                data = ExtractSubprocessor.Cli.rects_stage (data=data,
-                                                            image=image,
-                                                            max_faces_from_image=self.max_faces_from_image,
-                                                            rects_extractor=self.rects_extractor,
-                                                            )
+                data = ExtractSubprocessor.Cli.rects_stage(data=data, image=image, max_faces_from_image=self.max_faces_from_image, rects_extractor=self.rects_extractor)
 
             if 'landmarks' in self.type or self.type == 'all':
-                data = ExtractSubprocessor.Cli.landmarks_stage (data=data,
-                                                                image=image,
-                                                                landmarks_extractor=self.landmarks_extractor,
-                                                                rects_extractor=self.rects_extractor,
-                                                                )
+                data = ExtractSubprocessor.Cli.landmarks_stage(data=data, image=image, landmarks_extractor=self.landmarks_extractor, rects_extractor=self.rects_extractor)
 
             if self.type == 'final' or self.type == 'all':
-                data = ExtractSubprocessor.Cli.final_stage(data=data,
-                                                           image=image,
-                                                           face_type=self.face_type,
-                                                           image_size=self.image_size,
-                                                           jpeg_quality=self.jpeg_quality,
-                                                           output_debug_path=self.output_debug_path,
-                                                           final_output_path=self.final_output_path,
-                                                           big_angle_only=self.big_angle_only
-                                                           )
+                data = ExtractSubprocessor.Cli.final_stage(data=data, image=image, face_type=self.face_type, image_size=self.image_size, jpeg_quality=self.jpeg_quality, output_debug_path=self.output_debug_path, final_output_path=self.final_output_path, big_angle_only=self.big_angle_only)
+
             return data
+
 
         @staticmethod
         def rects_stage(data,
@@ -238,7 +235,7 @@ class ExtractSubprocessor(Subprocessor):
                     min_x = np.min(image_landmarks[:, 0])
                     max_x = np.max(image_landmarks[:, 0])
                     min_y = np.min(image_landmarks[:, 1])
-                            max_y = np.max(image_landmarks[:, 1])
+                    max_y = np.max(image_landmarks[:, 1])
 
                     # 计算边界框的宽度和高度
                     width = max_x - min_x
@@ -251,13 +248,13 @@ class ExtractSubprocessor(Subprocessor):
                     if big_angle_only == True:
                             
                             #尺寸小的不保留
-                            if width+height < 500:
+                            if width+height < 800:
                                 continue
                             
                             pitch = np.degrees(pitch)
                             yaw = np.degrees(yaw)
                             
-                            if (pitch>-35 and pitch<20):
+                            if (pitch>-35 and pitch<10):
                                 continue
 
                     landmarks_bbox = LandmarksProcessor.transform_points ( [ (0,0), (0,image_size-1), (image_size-1, image_size-1), (image_size-1,0) ], image_to_face_mat, True)
@@ -659,7 +656,6 @@ class ExtractSubprocessor(Subprocessor):
 
         io.show_image (self.wnd_name, image)
 
-
     #override
     def on_result (self, host_dict, data, result):
         if self.type == 'landmarks-manual':
@@ -673,12 +669,9 @@ class ExtractSubprocessor(Subprocessor):
             self.result.append ( result )
             io.progress_bar_inc(1)
 
-
-
     #override
     def get_result(self):
         return self.result
-
 
 class DeletedFilesSearcherSubprocessor(Subprocessor):
     class Cli(Subprocessor.Cli):
@@ -737,6 +730,145 @@ class DeletedFilesSearcherSubprocessor(Subprocessor):
     def get_result(self):
         return self.result
 
+# 定义用于提取下一批帧的函数
+def extract_next_batch(video_capture, start_frame, frame_interval, batch_size, fps):
+    frame_batch = []
+    video_capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    for _ in range(batch_size):
+        ret, frame = video_capture.read()
+        if not ret:
+            break
+        current_frame = int(video_capture.get(cv2.CAP_PROP_POS_FRAMES))
+        frame_time = current_frame / fps
+        frame_batch.append((frame, frame_time))
+        video_capture.set(cv2.CAP_PROP_POS_FRAMES, current_frame + frame_interval - 1)
+
+    return frame_batch
+
+def extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,manual_window_size):
+    
+    # 打开视频文件
+    video_capture = cv2.VideoCapture(str(input_path))
+    if not video_capture.isOpened():
+        io.log_err(f"无法打开视频文件: {input_path}")
+        return
+    output_debug_path = output_path.parent / (output_path.name + '_debug')
+    
+    detector = 's3fd'
+
+    device_config = nn.DeviceConfig.GPUIndexes( force_gpu_idxs or nn.ask_choose_device_idxs(choose_only_one=detector=='manual', suggest_all_gpu=True) ) \
+                    if not cpu_only else nn.DeviceConfig.CPU()
+
+    big_angle_only = io.input_int(f"只要大角度人脸图片", 0, valid_range=[0,1], help_message="为了提高普适性")
+    if big_angle_only == 0:
+        big_angle_only = False
+    else:
+        big_angle_only == True
+
+
+    face_type = io.input_str ("脸类型 Face type", 'wf', ['f','wf','head'], help_message="Full face / whole face / head. 'Whole face' covers full area of face include forehead. 'head' covers full head, but requires XSeg for src and dst faceset.").lower()
+    face_type = {'f'  : FaceType.FULL,
+                    'wf' : FaceType.WHOLE_FACE,
+                    'head' : FaceType.HEAD}[face_type]
+
+    max_faces_from_image = io.input_int(f"单张图中提取人脸数量上限 Max number of faces from image", 0, help_message="If you extract a src faceset that has frames with a large number of faces, it is advisable to set max faces to 3 to speed up extraction. 0 - unlimited")
+
+    image_size = io.input_int(f"图片大小 Image size", 512 if face_type < FaceType.HEAD else 768, valid_range=[256,2048], help_message="Output image size. The higher image size, the worse face-enhancer works. Use higher than 512 value only if the source image is sharp enough and the face does not need to be enhanced.")
+
+    jpeg_quality = io.input_int(f"图片质量 Jpeg quality", 90, valid_range=[1,100], help_message="Jpeg quality. The higher jpeg quality the larger the output file size.")
+
+    output_debug = io.input_bool (f"保存调试图片 Write debug images to {output_debug_path.name}?", False)
+
+    output_debug_path.mkdir(parents=True, exist_ok=True)
+    faces_detected = 0
+    frame_count = 0
+
+    # 获取视频的总时长和帧率
+    total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = int(video_capture.get(cv2.CAP_PROP_FPS))
+    duration = total_frames / fps
+
+    # 命令行询问开始和结束时间
+    start_time = io.input_int("请输入从多少秒开始处理 (0 到 %.2f): " % duration, 0, valid_range=[0, duration])
+    end_time = io.input_int("请输入提前多少秒结束 (0 到 %.2f): " % (duration - start_time), 0, valid_range=[0, duration - start_time])
+
+    start_frame = int(start_time * fps)
+    end_frame = total_frames - int(end_time * fps)
+
+    io.log_info("开始从视频中提取帧并处理人脸...")
+
+    
+    # 跳到开始帧
+    video_capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    frame_batch = []
+    batch_size = 200
+    future_next_batch = None
+
+    frame_interval = 5  # 设置每隔 5 帧读取一帧
+
+    # 初始化线程池
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    # 设置初始帧位置
+    current_frame = int(video_capture.get(cv2.CAP_PROP_POS_FRAMES))
+    future_next_batch = executor.submit(
+        extract_next_batch, video_capture, current_frame, frame_interval, batch_size, fps
+    )
+
+    while True:
+        # 等待当前批次准备完毕
+        if future_next_batch is not None:
+            frame_batch = future_next_batch.result()
+            future_next_batch = None
+
+        # 如果当前批次为空，结束处理
+        if not frame_batch:
+            break
+
+        # 启动下一批提取任务
+        current_frame = int(video_capture.get(cv2.CAP_PROP_POS_FRAMES))
+        if current_frame < end_frame:
+            future_next_batch = executor.submit(
+                extract_next_batch, video_capture, current_frame, frame_interval, batch_size, fps
+            )
+
+        # 开始处理当前批次
+        data_batch = [
+            ExtractSubprocessor.Data(
+                image=frame,
+                filepath=Path(f"time_{time*100}s")
+            )
+            for frame, time in frame_batch
+        ]
+
+        data = ExtractSubprocessor(data_batch,
+                                    'all',
+                                    image_size,
+                                    jpeg_quality,
+                                    face_type,
+                                    output_debug_path if output_debug else None,
+                                    max_faces_from_image=max_faces_from_image,
+                                    final_output_path=output_path,
+                                    device_config=device_config,
+                                    big_angle_only=big_angle_only).run()
+
+        faces_detected += sum([d.faces_detected for d in data])
+        frame_count += len(frame_batch)
+        io.log_info(f'处理进度： {frame_count} / {end_frame - start_frame}')
+
+    # 关闭线程池
+    executor.shutdown()
+    video_capture.release()
+
+    io.log_info('-------------------------')
+    io.log_info(f'处理的帧数量: {frame_count}')
+    io.log_info(f'检测到的人脸数量: {faces_detected}')
+    io.log_info('-------------------------')
+
 def main(detector=None,
          input_path=None,
          output_path=None,
@@ -761,6 +893,10 @@ def main(detector=None,
 
     if face_type is not None:
         face_type = FaceType.fromString(face_type)
+
+    if input("从照片集提取（0）还是从视频（1）直接提取？") == '1':
+        extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,manual_window_size)
+        return
 
     if face_type is None:
         if manual_output_debug_fix:
@@ -792,7 +928,7 @@ def main(detector=None,
 
     device_config = nn.DeviceConfig.GPUIndexes( force_gpu_idxs or nn.ask_choose_device_idxs(choose_only_one=detector=='manual', suggest_all_gpu=True) ) \
                     if not cpu_only else nn.DeviceConfig.CPU()
-                    
+
     big_angle_only = io.input_int(f"只要大角度人脸图片", 0, valid_range=[0,1], help_message="为了提高普适性")
     if big_angle_only == 0:
         big_angle_only = False
@@ -882,3 +1018,4 @@ def main(detector=None,
     io.log_info ('图片数量:      %d' % (images_found) )
     io.log_info ('人脸数量:      %d' % (faces_detected) )
     io.log_info ('-------------------------')
+
