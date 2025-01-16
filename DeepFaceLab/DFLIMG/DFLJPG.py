@@ -23,16 +23,24 @@ class DFLJPG(object):
         self.shape = None
         self.img = None
 
+
     @staticmethod
     def load_raw(filename, loader_func=None):
         try:
-            if loader_func is not None:
-                data = loader_func(filename)
+            # 判断输入类型
+            if isinstance(filename, bytes):
+                # 如果是字节数据，直接使用
+                data = filename
+                
             else:
-                with open(filename, "rb") as f:
-                    data = f.read()
-        except:
-            raise FileNotFoundError(filename)
+                # 按文件路径处理
+                if loader_func is not None:
+                    data = loader_func(filename)
+                else:
+                    with open(filename, "rb") as f:
+                        data = f.read()
+        except Exception as e:
+            raise FileNotFoundError(f"Failed to load data from {filename}: {e}")
 
         try:
             inst = DFLJPG(filename)

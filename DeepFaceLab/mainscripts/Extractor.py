@@ -52,7 +52,7 @@ class ExtractSubprocessor(Subprocessor):
             self.cpu_only             = client_dict['device_type'] == 'CPU'
             self.final_output_path    = client_dict['final_output_path']
             self.output_debug_path    = client_dict['output_debug_path']
-            self.big_angle_only       = client_dict['big_angle_only']
+            self.big_resolution_only       = client_dict['big_resolution_only']
 
             #transfer and set stdin in order to work code.interact in debug subprocess
             stdin_fd         = client_dict['stdin_fd']
@@ -116,7 +116,7 @@ class ExtractSubprocessor(Subprocessor):
                 data = ExtractSubprocessor.Cli.landmarks_stage(data=data, image=image, landmarks_extractor=self.landmarks_extractor, rects_extractor=self.rects_extractor)
 
             if self.type == 'final' or self.type == 'all':
-                data = ExtractSubprocessor.Cli.final_stage(data=data, image=image, face_type=self.face_type, image_size=self.image_size, jpeg_quality=self.jpeg_quality, output_debug_path=self.output_debug_path, final_output_path=self.final_output_path, big_angle_only=self.big_angle_only)
+                data = ExtractSubprocessor.Cli.final_stage(data=data, image=image, face_type=self.face_type, image_size=self.image_size, jpeg_quality=self.jpeg_quality, output_debug_path=self.output_debug_path, final_output_path=self.final_output_path, big_resolution_only=self.big_resolution_only)
 
             return data
 
@@ -202,7 +202,7 @@ class ExtractSubprocessor(Subprocessor):
                         jpeg_quality,
                         output_debug_path=None,
                         final_output_path=None,
-                        big_angle_only = False,
+                        big_resolution_only = False,
                         ):
             data.final_output_files = []
             filepath = data.filepath
@@ -218,52 +218,56 @@ class ExtractSubprocessor(Subprocessor):
                     continue
 
                 rect = np.array(rect)
-
                 if face_type == FaceType.MARK_ONLY:
                     image_to_face_mat = None
                     face_image = image
                     face_image_landmarks = image_landmarks
                 else:                
 
+                    # 计特征点的宽度和高度
+                    width = rect[2] - rect[1]
+                    height = rect[3] - rect[0]
 
-                    image_to_face_mat = LandmarksProcessor.get_transform_mat (image_landmarks, image_size, face_type)
-                    face_image = cv2.warpAffine(image, image_to_face_mat, (image_size, image_size), cv2.INTER_LANCZOS4)
-                    face_image_landmarks = LandmarksProcessor.transform_points (image_landmarks, image_to_face_mat)
-                    pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(face_image_landmarks, size=image_size)
-                    if abs(pitch)>70 or abs(yaw) > 70:#s3fd只能识别到75度
-                        continue
-                    min_x = np.min(image_landmarks[:, 0])
-                    max_x = np.max(image_landmarks[:, 0])
-                    min_y = np.min(image_landmarks[:, 1])
-                    max_y = np.max(image_landmarks[:, 1])
-
-                    # 计算边界框的宽度和高度
-                    width = max_x - min_x
-                    height = max_y - min_y
-                    a,b,c = image.shape
-                    #误识别，大黑边的情况
-                    # print(int(width*height),int(a*b*0.4),filepath)
-                    if width*height > a*b*0.4:
-                        continue
-                    if big_angle_only == True:
-                            
+                    if big_resolution_only == True:  
                             #尺寸小的不保留
                             if width+height < 800:
                                 continue
-                            
-                            pitch = np.degrees(pitch)
-                            yaw = np.degrees(yaw)
-                            
-                            if (pitch>-35 and pitch<10):
-                                continue
+                    
+                    image_to_face_mat = LandmarksProcessor.get_transform_mat (image_landmarks, image_size, face_type)
+                    scale_x = np.sqrt(image_to_face_mat[0, 0]**2 + image_to_face_mat[1, 0]**2)
+                    if scale_x < 0.23:#误识别，大黑边的情况
+                        continue
 
-                    landmarks_bbox = LandmarksProcessor.transform_points ( [ (0,0), (0,image_size-1), (image_size-1, image_size-1), (image_size-1,0) ], image_to_face_mat, True)
+                    # 将关键点和边界框组合成一个数组，进行一次性变换
+                    all_points = np.vstack([
+                        image_landmarks,  # 原始关键点
+                        [(0, 0), (0, image_size - 1), (image_size - 1, image_size - 1), (image_size - 1, 0)]  # 边界框顶点
+                    ])
+
+                    # 调用 transform_points，无需使用 return_as_tuple 参数
+                    transformed_points = LandmarksProcessor.transform_points(all_points, image_to_face_mat)
+
+                    # 如果返回的是列表或元组，将其转换为 NumPy 数组
+                    transformed_points = np.array(transformed_points)
+
+                    # 分离关键点和边界框
+                    face_image_landmarks = transformed_points[:len(image_landmarks)]  # 提取变换后的关键点
+                    landmarks_bbox = transformed_points[len(image_landmarks):]        # 提取变换后的边界框顶点
 
                     rect_area      = mathlib.polygon_area(np.array(rect[[0,2,2,0]]).astype(np.float32), np.array(rect[[1,1,3,3]]).astype(np.float32))
                     landmarks_area = mathlib.polygon_area(landmarks_bbox[:,0].astype(np.float32), landmarks_bbox[:,1].astype(np.float32) )
 
-                    if not data.manual and face_type <= FaceType.FULL_NO_ALIGN and landmarks_area > 4*rect_area: #get rid of faces which umeyama-landmark-area > 4*detector-rect-area
+                    if not data.manual and face_type <= FaceType.FULL_NO_ALIGN and landmarks_area > rect_area: #get rid of faces which umeyama-landmark-area > detector-rect-area
+                        io.log_info(f'3 {landmarks_area} >{rect_area}')
                         continue
+
+                    pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(face_image_landmarks, size=image_size)
+                    if abs(pitch)>70 or abs(yaw) > 70:#s3fd只能识别到75度
+                        continue
+
+                    #没问题了再生成图片
+                    face_image = cv2.warpAffine(image, image_to_face_mat, (image_size, image_size), cv2.INTER_LANCZOS4)
+
 
                     if output_debug_path is not None:
                         LandmarksProcessor.draw_rect_landmarks (debug_image, rect, image_landmarks, face_type, image_size, transparent_mask=True)
@@ -272,19 +276,27 @@ class ExtractSubprocessor(Subprocessor):
                 if data.force_output_path is not None:
                     output_path = data.force_output_path
 
+                # 替换写入和读取代码
                 output_filepath = output_path / f"{filepath.stem}_{face_idx}.jpg"
-                cv2_imwrite(output_filepath, face_image, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality ] )
 
-                dflimg = DFLJPG.load(output_filepath)
+                # 使用 OpenCV 编码为 JPEG 格式
+                _, encoded_image = cv2.imencode('.jpg', face_image, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
+
+                # 加载图像到 DFLJPG 对象
+                dflimg = DFLJPG.load(encoded_image.tobytes())
                 dflimg.set_face_type(FaceType.toString(face_type))
                 dflimg.set_landmarks(face_image_landmarks.tolist())
                 dflimg.set_source_filename(filepath.name)
                 dflimg.set_source_rect(rect)
                 dflimg.set_source_landmarks(image_landmarks.tolist())
                 dflimg.set_image_to_face_mat(image_to_face_mat)
+                dflimg.filename = output_filepath
+
+                # 保存最终结果到磁盘
                 dflimg.save()
 
-                data.final_output_files.append (output_filepath)
+                # 添加到输出文件列表
+                data.final_output_files.append(output_filepath)
                 face_idx += 1
             data.faces_detected = face_idx
 
@@ -332,7 +344,7 @@ class ExtractSubprocessor(Subprocessor):
         elif type == 'final':
             return [ (i, 'CPU', 'CPU%d' % (i), 0 ) for i in (range(min(8, multiprocessing.cpu_count())) if not DEBUG else [0]) ]
 
-    def __init__(self, input_data, type, image_size=None, jpeg_quality=None, face_type=None, output_debug_path=None, manual_window_size=0, max_faces_from_image=0, final_output_path=None, device_config=None,big_angle_only=False):
+    def __init__(self, input_data, type, image_size=None, jpeg_quality=None, face_type=None, output_debug_path=None, manual_window_size=0, max_faces_from_image=0, final_output_path=None, device_config=None,big_resolution_only=False):
         if type == 'landmarks-manual':
             for x in input_data:
                 x.manual = True
@@ -348,7 +360,7 @@ class ExtractSubprocessor(Subprocessor):
         self.manual_window_size = manual_window_size
         self.max_faces_from_image = max_faces_from_image
         self.result = []
-        self.big_angle_only = big_angle_only
+        self.big_resolution_only = big_resolution_only
 
         self.devices = ExtractSubprocessor.get_devices_for_config(self.type, device_config)
 
@@ -398,7 +410,7 @@ class ExtractSubprocessor(Subprocessor):
                      'max_faces_from_image':self.max_faces_from_image,
                      'output_debug_path': self.output_debug_path,
                      'final_output_path': self.final_output_path,
-                     'big_angle_only': self.big_angle_only,
+                     'big_resolution_only': self.big_resolution_only,
                      'stdin_fd': sys.stdin.fileno() }
 
 
@@ -746,56 +758,45 @@ def extract_next_batch(video_capture, start_frame, frame_interval, batch_size, f
 
     return frame_batch
 
-def extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,manual_window_size):
-    
+def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only, manual_window_size, params):
     # 打开视频文件
     video_capture = cv2.VideoCapture(str(input_path))
     if not video_capture.isOpened():
         io.log_err(f"无法打开视频文件: {input_path}")
         return
-    output_debug_path = output_path.parent / (output_path.name + '_debug')
     
-    detector = 's3fd'
 
-    device_config = nn.DeviceConfig.GPUIndexes( force_gpu_idxs or nn.ask_choose_device_idxs(choose_only_one=detector=='manual', suggest_all_gpu=True) ) \
-                    if not cpu_only else nn.DeviceConfig.CPU()
+    device_config = params['device_config']
+    big_resolution_only = params['big_resolution_only']
+    face_type = params['face_type']
+    max_faces_from_image = params['max_faces_from_image']
+    image_size = params['image_size']
+    jpeg_quality = params['jpeg_quality']
+    output_debug = params['output_debug']
 
-    big_angle_only = io.input_int(f"只要大角度人脸图片", 0, valid_range=[0,1], help_message="为了提高普适性")
-    if big_angle_only == 0:
-        big_angle_only = False
-    else:
-        big_angle_only == True
-
-
-    face_type = io.input_str ("脸类型 Face type", 'wf', ['f','wf','head'], help_message="Full face / whole face / head. 'Whole face' covers full area of face include forehead. 'head' covers full head, but requires XSeg for src and dst faceset.").lower()
-    face_type = {'f'  : FaceType.FULL,
-                    'wf' : FaceType.WHOLE_FACE,
-                    'head' : FaceType.HEAD}[face_type]
-
-    max_faces_from_image = io.input_int(f"单张图中提取人脸数量上限 Max number of faces from image", 0, help_message="If you extract a src faceset that has frames with a large number of faces, it is advisable to set max faces to 3 to speed up extraction. 0 - unlimited")
-
-    image_size = io.input_int(f"图片大小 Image size", 512 if face_type < FaceType.HEAD else 768, valid_range=[256,2048], help_message="Output image size. The higher image size, the worse face-enhancer works. Use higher than 512 value only if the source image is sharp enough and the face does not need to be enhanced.")
-
-    jpeg_quality = io.input_int(f"图片质量 Jpeg quality", 90, valid_range=[1,100], help_message="Jpeg quality. The higher jpeg quality the larger the output file size.")
-
-    output_debug = io.input_bool (f"保存调试图片 Write debug images to {output_debug_path.name}?", False)
-
-    output_debug_path.mkdir(parents=True, exist_ok=True)
+    if output_debug is True:
+        output_debug_path = output_path.parent / (output_path.name + '_debug')
+        output_debug_path.mkdir(parents=True, exist_ok=True)
     faces_detected = 0
     frame_count = 0
 
     # 获取视频的总时长和帧率
     total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = int(video_capture.get(cv2.CAP_PROP_FPS))
-    duration = total_frames / fps
 
     # 命令行询问开始和结束时间
-    start_time = io.input_int("请输入从多少秒开始处理 (0 到 %.2f): " % duration, 0, valid_range=[0, duration])
-    end_time = io.input_int("请输入提前多少秒结束 (0 到 %.2f): " % (duration - start_time), 0, valid_range=[0, duration - start_time])
+    start_time = params['start_time']
+    end_time = params['end_time']
+
 
     start_frame = int(start_time * fps)
     end_frame = total_frames - int(end_time * fps)
-
+    if start_frame > end_frame:
+        print('.....................')
+        print("跳过此视频，已处理完毕")
+        print(input_path)
+        print('.....................')
+        return
     io.log_info("开始从视频中提取帧并处理人脸...")
 
     
@@ -805,7 +806,7 @@ def extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,man
     from concurrent.futures import ThreadPoolExecutor
 
     frame_batch = []
-    batch_size = 200
+    batch_size = 150
     future_next_batch = None
 
     frame_interval = 5  # 设置每隔 5 帧读取一帧
@@ -819,7 +820,7 @@ def extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,man
         extract_next_batch, video_capture, current_frame, frame_interval, batch_size, fps
     )
 
-    while True:
+    while current_frame < end_frame:
         # 等待当前批次准备完毕
         if future_next_batch is not None:
             frame_batch = future_next_batch.result()
@@ -854,11 +855,11 @@ def extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,man
                                     max_faces_from_image=max_faces_from_image,
                                     final_output_path=output_path,
                                     device_config=device_config,
-                                    big_angle_only=big_angle_only).run()
+                                    big_resolution_only=big_resolution_only).run()
 
         faces_detected += sum([d.faces_detected for d in data])
         frame_count += len(frame_batch)
-        io.log_info(f'处理进度： {frame_count} / {end_frame - start_frame}')
+        io.log_info(f'处理进度： {frame_count} / {(end_frame - start_frame)/5}')
 
     # 关闭线程池
     executor.shutdown()
@@ -868,6 +869,88 @@ def extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,man
     io.log_info(f'处理的帧数量: {frame_count}')
     io.log_info(f'检测到的人脸数量: {faces_detected}')
     io.log_info('-------------------------')
+
+def extract_faces_from_directory(input_dir, output_dir, force_gpu_idxs=None, cpu_only=False, manual_window_size=None):
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+
+    if not input_dir.exists():
+        io.log_err(f"输入目录不存在: {input_dir}")
+        return
+
+    video_files = list(input_dir.glob("*.mp4")) + list(input_dir.glob("*.avi"))
+
+    if not video_files:
+        io.log_err(f"目录中没有视频文件: {input_dir}")
+        return
+
+    # 获取全局参数
+    detector = 's3fd'
+    io.log_info("选择提取算法 Choose detector type.")
+    io.log_info("[0] S3FD")
+    io.log_info("[1] manual")
+    detector = {0: 's3fd', 1: 'manual'}[io.input_int("", 0, [0, 1])]
+
+    device_config = nn.DeviceConfig.GPUIndexes(force_gpu_idxs or nn.ask_choose_device_idxs(choose_only_one=detector == 'manual', suggest_all_gpu=True)) \
+        if not cpu_only else nn.DeviceConfig.CPU()
+
+    big_resolution_only = io.input_int(f"只要高分辨率人脸图片？", 0, valid_range=[0, 1], help_message="为了提高普适性") == 1
+
+    face_type = io.input_str("脸类型 Face type", 'wf', ['f', 'wf', 'head'], help_message="Full face / whole face / head. 'Whole face' covers full area of face include forehead. 'head' covers full head, but requires XSeg for src and dst faceset.").lower()
+    face_type = {'f': FaceType.FULL,
+                 'wf': FaceType.WHOLE_FACE,
+                 'head': FaceType.HEAD}[face_type]
+
+    max_faces_from_image = io.input_int(f"单张图中提取人脸数量上限 Max number of faces from image", 0, help_message="If you extract a src faceset that has frames with a large number of faces, it is advisable to set max faces to 3 to speed up extraction. 0 - unlimited")
+
+    image_size = io.input_int(f"图片大小 Image size", 512 if face_type < FaceType.HEAD else 768, valid_range=[256, 2048], help_message="Output image size. The higher image size, the worse face-enhancer works. Use higher than 512 value only if the source image is sharp enough and the face does not need to be enhanced.")
+
+    jpeg_quality = io.input_int(f"图片质量 Jpeg quality", 90, valid_range=[1, 100], help_message="Jpeg quality. The higher jpeg quality the larger the output file size.")
+
+    output_debug = io.input_bool(f"保存调试图片 Write debug images?", False)
+
+    all_start_time = io.input_int("请输入从多少秒开始处理", 180, valid_range=[0, 10000])
+    start_time = all_start_time
+    end_time = io.input_int("请输入处理的结束时间", 180, valid_range=[start_time, 10000])
+
+    params = {
+        'detector': detector,
+        'device_config': device_config,
+        'big_resolution_only': big_resolution_only,
+        'face_type': face_type,
+        'max_faces_from_image': max_faces_from_image,
+        'image_size': image_size,
+        'jpeg_quality': jpeg_quality,
+        'output_debug': output_debug,
+        'start_time': start_time,
+        'end_time': end_time
+    }
+
+    for video_file in video_files:
+        video_output_path = output_dir / video_file.stem
+
+        # 检查是否已经有输出目录
+        if video_output_path.exists():
+            # 获取已经处理的最后一张图片的时间
+            processed_images = list(video_output_path.glob("*.jpg"))
+            if processed_images:
+                latest_image = max(processed_images, key=lambda p: float(p.stem.split('_')[-2].replace('s', '')))
+                params['start_time'] = float(latest_image.stem.split('_')[-2].replace('s', '')) / 100
+            else:
+                params['start_time'] = all_start_time
+        else:
+            video_output_path.mkdir(parents=True, exist_ok=True)
+            params['start_time'] = all_start_time
+
+        extract_face_without_pics(
+            video_file,
+            video_output_path,
+            force_gpu_idxs,
+            cpu_only,
+            manual_window_size,
+            params
+        )
+
 
 def main(detector=None,
          input_path=None,
@@ -884,6 +967,8 @@ def main(detector=None,
          force_gpu_idxs = None,
          ):
 
+    input_path = Path(input_path)
+    print(input_path)
     if not input_path.exists():
         io.log_err ('Input directory not found. Please ensure it exists.')
         return
@@ -895,7 +980,7 @@ def main(detector=None,
         face_type = FaceType.fromString(face_type)
 
     if input("从照片集提取（0）还是从视频（1）直接提取？") == '1':
-        extract_face_without_pics(input_path,output_path,force_gpu_idxs,cpu_only,manual_window_size)
+        extract_faces_from_directory(input_path,output_path,force_gpu_idxs,cpu_only,manual_window_size)
         return
 
     if face_type is None:
@@ -929,11 +1014,11 @@ def main(detector=None,
     device_config = nn.DeviceConfig.GPUIndexes( force_gpu_idxs or nn.ask_choose_device_idxs(choose_only_one=detector=='manual', suggest_all_gpu=True) ) \
                     if not cpu_only else nn.DeviceConfig.CPU()
 
-    big_angle_only = io.input_int(f"只要大角度人脸图片", 0, valid_range=[0,1], help_message="为了提高普适性")
-    if big_angle_only == 0:
-        big_angle_only = False
+    big_resolution_only = io.input_int(f"只要大角度人脸图片", 0, valid_range=[0,1], help_message="为了提高普适性")
+    if big_resolution_only == 0:
+        big_resolution_only = False
     else:
-        big_angle_only == True
+        big_resolution_only == True
 
     if face_type is None:
         face_type = io.input_str ("脸类型 Face type", 'wf', ['f','wf','head'], help_message="Full face / whole face / head. 'Whole face' covers full area of face include forehead. 'head' covers full head, but requires XSeg for src and dst faceset.").lower()
@@ -1000,7 +1085,7 @@ def main(detector=None,
                                          max_faces_from_image=max_faces_from_image,
                                          final_output_path=output_path,
                                          device_config=device_config,
-                                         big_angle_only=big_angle_only).run()
+                                         big_resolution_only=big_resolution_only).run()
 
         faces_detected += sum([d.faces_detected for d in data])
         if manual_fix:
