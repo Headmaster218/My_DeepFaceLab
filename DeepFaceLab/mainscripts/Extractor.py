@@ -365,7 +365,7 @@ class ExtractSubprocessor(Subprocessor):
         self.devices = ExtractSubprocessor.get_devices_for_config(self.type, device_config)
 
         super().__init__('Extractor', ExtractSubprocessor.Cli,
-                             999999 if type == 'landmarks-manual' or DEBUG else 120)
+                             99999999 if type == 'landmarks-manual' or DEBUG else 120)
 
     #override
     def on_clients_initialized(self):
