@@ -120,7 +120,6 @@ class ExtractSubprocessor(Subprocessor):
 
             return data
 
-
         @staticmethod
         def rects_stage(data,
                         image,

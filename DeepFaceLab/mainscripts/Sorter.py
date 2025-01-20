@@ -112,7 +112,6 @@ class BlurEstimatorSubprocessor(Subprocessor):
     def get_result(self):
         return self.img_list, self.trash_img_list
 
-
 def sort_by_blur(input_path):
     io.log_info ("Sorting by blur...")
 
@@ -175,6 +174,13 @@ def show_angle_distribution(angle_distribution, max_count):
     log_distribution = np.log1p(angle_distribution)
     normalized_log_distribution = (log_distribution - np.min(log_distribution)) / (np.max(log_distribution) - np.min(log_distribution))
     image = (normalized_log_distribution * 255).astype(np.uint8)
+
+    # 直接将大于10的部分设置为255，其余部分按比例缩放到[0, 255]范围
+    # image = np.where(angle_distribution > 2, 255, angle_distribution * 25.5)
+
+    # 将数据转换为 uint8 类型
+    image = image.astype(np.uint8)
+
     image_resized = cv2.resize(image, (700, 700), interpolation=cv2.INTER_NEAREST)
 
     # 计算每个色块的大小
@@ -240,9 +246,46 @@ def find_by_pitch(input_path):
             img_list.append([str(filepath)])  # 确保以列表的形式添加
         else:
             trash_img_list.append([str(filepath)])  # 确保以列表的形式添加
-
+    print('注：trash文件夹内为有效图片')
     return trash_img_list,img_list#将筛选出来的中间的丢弃
 
+from collections import defaultdict
+
+def find_n_pics_for_each_angle(input_path):
+    # 向用户询问每个角度区间选择多少张图片
+    pic_num = io.input_int(f"每个角度区间多少张？", 30)
+    
+    # 用于保存每个角度区间的图片
+    img_dict = defaultdict(list)
+    trash_img_list = []
+
+    io.log_info(f"每个角度区间选择 {pic_num} 张图片，角度区间为 10 度...")
+
+    # 遍历图片路径
+    for filepath in io.progress_bar_generator(pathex.get_image_paths(input_path), "Loading"):
+        filepath = Path(filepath)
+        dflimg = DFLIMG.load(filepath)
+        # 检查图片是否合法
+        if dflimg is None or not dflimg.has_data():
+            io.log_err(f"{filepath.name} 不符合 DFL 规范")
+            trash_img_list.append([str(filepath)])  # 确保以列表的形式添加
+            continue
+        # 估算角度
+        pitch, yaw, _ = LandmarksProcessor.estimate_pitch_yaw_roll(dflimg.get_landmarks(), size=dflimg.get_shape()[1])
+        # 将弧度转换为角度
+        pitch = math.degrees(pitch)
+        yaw = math.degrees(yaw)
+        pitch_interval = int((pitch + 90) / 180 * 19)
+        yaw_interval = int((yaw + 90) / 180 * 19)
+        # 在每个区间内添加图片
+        if len(img_dict[(pitch_interval, yaw_interval)]) < pic_num:
+            img_dict[(pitch_interval, yaw_interval)].append(str(filepath))  # 添加图片路径
+        else:
+            trash_img_list.append([str(filepath)])  # 超过数量限制的图片
+
+    all_images = [img for sublist in img_dict.values() for img in sublist]
+    print('注：trash文件夹内为有效图片')
+    return trash_img_list,all_images
 
 def find_n_best_faces(input_path):
     io.log_info("Analyzing face angles...")
@@ -284,9 +327,6 @@ def find_n_best_faces(input_path):
             else:
                 del angle_distribution[bin_key]
     make_angle_draft_by_paths(img_list)
-    # return img_list, trash_img_list
-
-
 
 def sort_by_face_yaw(input_path):
     io.log_info ("Sorting by face yaw...")
@@ -357,8 +397,6 @@ def sort_by_face_source_rect_size(input_path):
     img_list = sorted(img_list, key=operator.itemgetter(1), reverse=True)
 
     return img_list, trash_img_list
-
-
 
 class HistSsimSubprocessor(Subprocessor):
     class Cli(Subprocessor.Cli):
@@ -1031,7 +1069,7 @@ def final_process(input_path, img_list, trash_img_list):
             Path(filename).unlink()
 
         for i in io.progress_bar_generator( range(len(trash_img_list)), "Moving trash", leave=False):
-            src = Path (trash_img_list[i][0])
+            src = Path (trash_img_list[i])
             dst = trash_path / src.name
             try:
                 src.rename (dst)
@@ -1056,7 +1094,7 @@ def final_process(input_path, img_list, trash_img_list):
             try:
                 src.rename (dst)
             except:
-                io.log_info ('fail to rename %s' % (src.name) )
+                io.log_info ('fail to rename in progress 2 %s' % (src.name) )
 
 sort_func_methods = {
     'blur':        ("模糊程度 blur", sort_by_blur),
@@ -1076,7 +1114,8 @@ sort_func_methods = {
     'final-fast':  ("综合筛选 快速best faces faster", sort_best_faster),
     'make-angle-draft':  ("绘制人脸角度分布图", make_angle_draft_by_folder),
     'find-n-best': ("根据角度和模糊程度找到最好的n张脸", find_n_best_faces),
-    'find-by-pitch':("丢弃中间a~b角度的脸", find_by_pitch)
+    'find-by-pitch':("丢弃中间a~b角度的脸", find_by_pitch),
+    'find-n-pics-for-each-angle-square':("给每个角度区间找到n张脸",find_n_pics_for_each_angle)
 }
 
 def main (input_path, sort_by_method=None):
