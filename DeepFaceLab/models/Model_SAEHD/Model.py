@@ -672,6 +672,10 @@ Examples: df, liae, df-d, df-ud, liae-ud, ...
             if ct_mode is not None:
                 src_generators_count = int(src_generators_count * 1.5)
 
+            src_generators_count = cpu_count - 2
+            dst_generators_count = cpu_count - 2
+
+
             self.set_training_data_generators ([
                     SampleGeneratorFace(training_data_src_path, random_ct_samples_path=random_ct_samples_path, debug=self.is_debug(), batch_size=self.get_batch_size(),
                         sample_process_options=SampleProcessor.Options(scale_range=[-0.15, 0.15], random_flip=random_src_flip),
