@@ -744,18 +744,31 @@ class DeletedFilesSearcherSubprocessor(Subprocessor):
 # 定义用于提取下一批帧的函数
 def extract_next_batch(video_capture, start_frame, frame_interval, batch_size, fps):
     frame_batch = []
+
+    # 快进到 start_frame
     video_capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-    for _ in range(batch_size):
+    for i in range(batch_size):
         ret, frame = video_capture.read()
         if not ret:
             break
         current_frame = int(video_capture.get(cv2.CAP_PROP_POS_FRAMES))
-        frame_time = current_frame / fps
+        frame_time = video_capture.get(cv2.CAP_PROP_POS_MSEC) / 1000
         frame_batch.append((frame, frame_time))
-        video_capture.set(cv2.CAP_PROP_POS_FRAMES, current_frame + frame_interval - 1)
 
+        # 跳过 frame_interval - 1 帧
+        for _ in range(frame_interval - 1):
+            ret, _ = video_capture.read()
+            if not ret:
+                break
+            current_frame += 1
+
+        current_frame += 1
+        if (i+1) % 50 == 0:  # 每50帧输出一次进度
+            io.log_info(f'批次处理进度： {i+1} / {batch_size}')
+    
     return frame_batch
+
 
 def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only, manual_window_size, params):
     # 打开视频文件
@@ -772,6 +785,8 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
     image_size = params['image_size']
     jpeg_quality = params['jpeg_quality']
     output_debug = params['output_debug']
+    frame_interval = params['frame_interval']
+    batch_size = params['batch_size']
 
     if output_debug is True:
         output_debug_path = output_path.parent / (output_path.name + '_debug')
@@ -783,7 +798,7 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
     total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = int(video_capture.get(cv2.CAP_PROP_FPS))
 
-    # 命令行询问开始和结束时间
+    # 命令行询问片头片尾
     start_time = params['start_time']
     end_time = params['end_time']
 
@@ -805,10 +820,8 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
     from concurrent.futures import ThreadPoolExecutor
 
     frame_batch = []
-    batch_size = 150
-    future_next_batch = None
 
-    frame_interval = 5  # 设置每隔 5 帧读取一帧
+    future_next_batch = None
 
     # 初始化线程池
     executor = ThreadPoolExecutor(max_workers=1)
@@ -858,7 +871,7 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
 
         faces_detected += sum([d.faces_detected for d in data])
         frame_count += len(frame_batch)
-        io.log_info(f'处理进度： {frame_count} / {(end_frame - start_frame)/5}')
+        io.log_info(f'处理进度： {frame_count} / {(end_frame - start_frame)/frame_interval}')
 
     # 关闭线程池
     executor.shutdown()
@@ -893,7 +906,7 @@ def extract_faces_from_directory(input_dir, output_dir, force_gpu_idxs=None, cpu
     device_config = nn.DeviceConfig.GPUIndexes(force_gpu_idxs or nn.ask_choose_device_idxs(choose_only_one=detector == 'manual', suggest_all_gpu=True)) \
         if not cpu_only else nn.DeviceConfig.CPU()
 
-    big_resolution_only = io.input_int(f"只要高分辨率人脸图片？", 0, valid_range=[0, 1], help_message="为了提高普适性") == 1
+    big_resolution_only = io.input_int(f"只要高分辨率人脸图片？", 1, valid_range=[0, 1], help_message="为了提高普适性") == 1
 
     face_type = io.input_str("脸类型 Face type", 'wf', ['f', 'wf', 'head'], help_message="Full face / whole face / head. 'Whole face' covers full area of face include forehead. 'head' covers full head, but requires XSeg for src and dst faceset.").lower()
     face_type = {'f': FaceType.FULL,
@@ -904,13 +917,18 @@ def extract_faces_from_directory(input_dir, output_dir, force_gpu_idxs=None, cpu
 
     image_size = io.input_int(f"图片大小 Image size", 512 if face_type < FaceType.HEAD else 768, valid_range=[256, 2048], help_message="Output image size. The higher image size, the worse face-enhancer works. Use higher than 512 value only if the source image is sharp enough and the face does not need to be enhanced.")
 
-    jpeg_quality = io.input_int(f"图片质量 Jpeg quality", 90, valid_range=[1, 100], help_message="Jpeg quality. The higher jpeg quality the larger the output file size.")
+    jpeg_quality = io.input_int(f"图片质量 Jpeg quality", 100, valid_range=[1, 100], help_message="Jpeg quality. The higher jpeg quality the larger the output file size.")
 
     output_debug = io.input_bool(f"保存调试图片 Write debug images?", False)
 
-    all_start_time = io.input_int("请输入从多少秒开始处理", 180, valid_range=[0, 10000])
+    all_start_time = io.input_int("请输入片头长度", 90, valid_range=[0, 10000])
     start_time = all_start_time
-    end_time = io.input_int("请输入处理的结束时间", 180, valid_range=[start_time, 10000])
+    end_time = io.input_int("请输入片尾长度", 150, valid_range=[start_time, 10000])
+
+    frame_interval = io.input_int("每隔多少帧处理一次", 3, valid_range=[0, 10], help_message="每隔多少帧处理一次，0 - 每帧处理一次")
+
+    batch_size = io.input_int("每次处理多少帧", 150, valid_range=[1, 300], help_message="每次处理多少帧，32g内存150-200，16g内存100-150，8g内存50-100")
+
 
     params = {
         'detector': detector,
@@ -922,7 +940,9 @@ def extract_faces_from_directory(input_dir, output_dir, force_gpu_idxs=None, cpu
         'jpeg_quality': jpeg_quality,
         'output_debug': output_debug,
         'start_time': start_time,
-        'end_time': end_time
+        'end_time': end_time,
+        'frame_interval': frame_interval,
+        'batch_size': batch_size  # 每次处理的帧数
     }
 
     for video_file in video_files:
@@ -978,9 +998,10 @@ def main(detector=None,
     if face_type is not None:
         face_type = FaceType.fromString(face_type)
 
-    if input("从照片集提取（0）还是从视频（1）直接提取？") == '1':
+    if io.input_int(f"从照片集提取（0）还是从视频（1）直接提取？", 1, valid_range=[0,1], help_message="如果你想从视频中提取人脸，请选择1，否则选择0"):
         extract_faces_from_directory(input_path,output_path,force_gpu_idxs,cpu_only,manual_window_size)
         return
+
 
     if face_type is None:
         if manual_output_debug_fix:
