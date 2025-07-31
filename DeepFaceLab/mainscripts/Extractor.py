@@ -742,17 +742,16 @@ class DeletedFilesSearcherSubprocessor(Subprocessor):
         return self.result
 
 # 定义用于提取下一批帧的函数
-def extract_next_batch(video_capture, start_frame, frame_interval, batch_size, fps):
+def extract_next_batch(video_capture, start_time_ms, frame_interval, batch_size, fps):
     frame_batch = []
 
     # 快进到 start_frame
-    video_capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    video_capture.set(cv2.CAP_PROP_POS_MSEC, start_time_ms)
 
     for i in range(batch_size):
         ret, frame = video_capture.read()
         if not ret:
             break
-        current_frame = int(video_capture.get(cv2.CAP_PROP_POS_FRAMES))
         frame_time = video_capture.get(cv2.CAP_PROP_POS_MSEC) / 1000
         frame_batch.append((frame, frame_time))
 
@@ -761,10 +760,8 @@ def extract_next_batch(video_capture, start_frame, frame_interval, batch_size, f
             ret, _ = video_capture.read()
             if not ret:
                 break
-            current_frame += 1
 
-        current_frame += 1
-        if (i+1) % 50 == 0:  # 每50帧输出一次进度
+        if ((i+1) % 50 == 0) or ((i+1) == batch_size):  # 每50帧输出一次进度
             io.log_info(f'批次处理进度： {i+1} / {batch_size}')
     
     return frame_batch
@@ -792,20 +789,18 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
         output_debug_path = output_path.parent / (output_path.name + '_debug')
         output_debug_path.mkdir(parents=True, exist_ok=True)
     faces_detected = 0
-    frame_count = 0
 
     # 获取视频的总时长和帧率
-    total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = int(video_capture.get(cv2.CAP_PROP_FPS))
 
-    # 命令行询问片头片尾
+    # 命令行询问
     start_time = params['start_time']
     end_time = params['end_time']
 
+    start_time_ms = start_time * 1000
+    end_time_ms =  end_time * 1000
 
-    start_frame = int(start_time * fps)
-    end_frame = total_frames - int(end_time * fps)
-    if start_frame > end_frame:
+    if start_time_ms > end_time_ms:
         print('.....................')
         print("跳过此视频，已处理完毕")
         print(input_path)
@@ -813,9 +808,8 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
         return
     io.log_info("开始从视频中提取帧并处理人脸...")
 
-    
     # 跳到开始帧
-    video_capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    video_capture.set(cv2.CAP_PROP_POS_MSEC, start_time_ms)
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -827,12 +821,12 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
     executor = ThreadPoolExecutor(max_workers=1)
 
     # 设置初始帧位置
-    current_frame = int(video_capture.get(cv2.CAP_PROP_POS_FRAMES))
+    current_time_ms = start_time_ms
     future_next_batch = executor.submit(
-        extract_next_batch, video_capture, current_frame, frame_interval, batch_size, fps
+        extract_next_batch, video_capture, current_time_ms, frame_interval, batch_size, fps
     )
 
-    while current_frame < end_frame:
+    while current_time_ms < end_time_ms:
         # 等待当前批次准备完毕
         if future_next_batch is not None:
             frame_batch = future_next_batch.result()
@@ -843,10 +837,10 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
             break
 
         # 启动下一批提取任务
-        current_frame = int(video_capture.get(cv2.CAP_PROP_POS_FRAMES))
-        if current_frame < end_frame:
+        current_time_ms = video_capture.get(cv2.CAP_PROP_POS_MSEC)
+        if current_time_ms < end_time_ms:
             future_next_batch = executor.submit(
-                extract_next_batch, video_capture, current_frame, frame_interval, batch_size, fps
+                extract_next_batch, video_capture, current_time_ms, frame_interval, batch_size, fps
             )
 
         # 开始处理当前批次
@@ -870,15 +864,14 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
                                     big_resolution_only=big_resolution_only).run()
 
         faces_detected += sum([d.faces_detected for d in data])
-        frame_count += len(frame_batch)
-        io.log_info(f'处理进度： {frame_count} / {(end_frame - start_frame)/frame_interval}')
+        io.log_info(f'处理进度： {current_time_ms} / {(end_time_ms - start_time_ms)}')
 
     # 关闭线程池
     executor.shutdown()
     video_capture.release()
 
     io.log_info('-------------------------')
-    io.log_info(f'处理的帧数量: {frame_count}')
+    io.log_info(f'处理的总时长: {(end_time_ms - start_time_ms)/1000}s')
     io.log_info(f'检测到的人脸数量: {faces_detected}')
     io.log_info('-------------------------')
 
@@ -921,9 +914,9 @@ def extract_faces_from_directory(input_dir, output_dir, force_gpu_idxs=None, cpu
 
     output_debug = io.input_bool(f"保存调试图片 Write debug images?", False)
 
-    all_start_time = io.input_int("请输入片头长度", 90, valid_range=[0, 10000])
+    all_start_time = io.input_int("请输入开始秒数", 90, valid_range=[0, 10000])
     start_time = all_start_time
-    end_time = io.input_int("请输入片尾长度", 150, valid_range=[start_time, 10000])
+    end_time = io.input_int("请输入结束秒数", 2400, valid_range=[start_time, 20000])
 
     frame_interval = io.input_int("每隔多少帧处理一次", 3, valid_range=[0, 10], help_message="每隔多少帧处理一次，0 - 每帧处理一次")
 
