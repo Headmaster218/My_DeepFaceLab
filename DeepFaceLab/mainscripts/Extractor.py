@@ -223,18 +223,18 @@ class ExtractSubprocessor(Subprocessor):
                     face_image_landmarks = image_landmarks
                 else:                
 
-                    # 计特征点的宽度和高度
+                    # 计算位置框的宽度和高度
                     width = rect[2] - rect[1]
                     height = rect[3] - rect[0]
-
                     if big_resolution_only == True:  
                             #尺寸小的不保留
-                            if width+height < 800:
+                            if width+height < 1000:
                                 continue
                     
                     image_to_face_mat = LandmarksProcessor.get_transform_mat (image_landmarks, image_size, face_type)
                     scale_x = np.sqrt(image_to_face_mat[0, 0]**2 + image_to_face_mat[1, 0]**2)
-                    if scale_x < 0.23:#误识别，大黑边的情况
+                    if scale_x < 0.18:#误识别，大黑边的情况
+                        # LandmarksProcessor.draw_landmarks(image, image_landmarks, color=(0, 0, 255), radius=2, thickness=1)
                         continue
 
                     # 将关键点和边界框组合成一个数组，进行一次性变换
@@ -253,6 +253,10 @@ class ExtractSubprocessor(Subprocessor):
                     face_image_landmarks = transformed_points[:len(image_landmarks)]  # 提取变换后的关键点
                     landmarks_bbox = transformed_points[len(image_landmarks):]        # 提取变换后的边界框顶点
 
+                    pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(face_image_landmarks, size=image_size)
+                    if abs(pitch)>70 or abs(yaw) > 70:#s3fd只能识别到75度
+                        continue
+
                     rect_area      = mathlib.polygon_area(np.array(rect[[0,2,2,0]]).astype(np.float32), np.array(rect[[1,1,3,3]]).astype(np.float32))
                     landmarks_area = mathlib.polygon_area(landmarks_bbox[:,0].astype(np.float32), landmarks_bbox[:,1].astype(np.float32) )
 
@@ -260,9 +264,7 @@ class ExtractSubprocessor(Subprocessor):
                         io.log_info(f'3 {landmarks_area} >{rect_area}')
                         continue
 
-                    pitch, yaw, roll = LandmarksProcessor.estimate_pitch_yaw_roll(face_image_landmarks, size=image_size)
-                    if abs(pitch)>70 or abs(yaw) > 70:#s3fd只能识别到75度
-                        continue
+
 
                     #没问题了再生成图片
                     face_image = cv2.warpAffine(image, image_to_face_mat, (image_size, image_size), cv2.INTER_LANCZOS4)
@@ -864,7 +866,7 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
                                     big_resolution_only=big_resolution_only).run()
 
         faces_detected += sum([d.faces_detected for d in data])
-        io.log_info(f'处理进度： {current_time_ms} / {(end_time_ms - start_time_ms)}')
+        io.log_info(f'处理进度： {int(current_time_ms/1000)} / {(end_time_ms - start_time_ms)/1000}')
 
     # 关闭线程池
     executor.shutdown()
