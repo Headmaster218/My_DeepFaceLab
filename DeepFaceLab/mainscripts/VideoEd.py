@@ -225,7 +225,10 @@ def video_from_sequence( input_dir, output_file, reference_file=None, ext=None, 
 
     input_image_paths = pathex.get_image_paths(input_path)
 
-    i_in = ffmpeg.input('pipe:', format='image2pipe', r=fps)
+    # i_in = ffmpeg.input('pipe:', format='image2pipe', r=fps)
+
+    i_in = ffmpeg.input('pipe:', format='image2pipe', r=fps, thread_queue_size=512)
+
 
     output_args = [i_in]
 
@@ -242,7 +245,7 @@ def video_from_sequence( input_dir, output_file, reference_file=None, ext=None, 
                                "pix_fmt": "yuv420p",
                               })
     else:
-        output_kwargs.update ({"c:v": "libx264",
+        output_kwargs.update ({"c:v": "h264_amf",
                                "b:v": "%dM" %(bitrate),
                                "pix_fmt": "yuv420p",
                               })
