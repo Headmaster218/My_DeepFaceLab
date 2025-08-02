@@ -46,7 +46,7 @@ class SAEHDModel(ModelBase):
         default_uniform_yaw        = self.options['uniform_yaw']        = self.load_or_def_option('uniform_yaw', False)
         default_blur_out_mask      = self.options['blur_out_mask']      = self.load_or_def_option('blur_out_mask', False)
 
-        default_adabelief          = self.options['adabelief']          = self.load_or_def_option('adabelief', True)
+        default_adabelief          = self.options['adabelief']          = self.load_or_def_option('adabelief', 'adam')
 
         lr_dropout = self.load_or_def_option('lr_dropout', 'n')
         lr_dropout = {True:'y', False:'n'}.get(lr_dropout, lr_dropout) #backward comp
@@ -147,7 +147,7 @@ Examples: df, liae, df-d, df-ud, liae-ud, ...
         if self.is_first_run() or ask_override:
             self.options['models_opt_on_gpu'] = io.input_bool ("将模型和优化器放在GPU上 Place models and optimizer on GPU", default_models_opt_on_gpu, help_message="When you train on one GPU, by default model and optimizer weights are placed on GPU to accelerate the process. You can place they on CPU to free up extra VRAM, thus set bigger dimensions.")
 
-            self.options['adabelief'] = io.input_bool ("使用信仰优化器 Use AdaBelief optimizer?", default_adabelief, help_message="Use AdaBelief optimizer. It requires more VRAM, but the accuracy and the generalization of the model is higher.")
+            self.options['adabelief'] = io.input_str ("使用哪个优化器 Use AdaBelief or Adam or RMS optimizer?", default_adabelief,['adabelief','adam','rms'], help_message="Use AdaBelief optimizer. It requires more VRAM, but the accuracy and the generalization of the model is higher.")
 
             self.options['lr_dropout']  = io.input_str (f"使用学习率dropout Use learning rate dropout", default_lr_dropout, ['n','y','cpu'], help_message="When the face is trained enough, you can enable this option to get extra sharpness and reduce subpixel shake for less amount of iterations. Enabled it before `disable random warp` and before GAN. \nn - disabled.\ny - enabled\ncpu - enabled on CPU. This allows not to use extra VRAM, sacrificing 20% time of iteration.")
 
@@ -317,14 +317,25 @@ Examples: df, liae, df-d, df-ud, liae-ud, ...
                     self.model_filename_list += [ [self.D_src, 'GAN.npy'] ]
 
                 # Initialize optimizers
-                lr=5e-5
+                # lr=5e-5
+                if adabelief == 'adabelief':
+                    lr = 5e-5
+                    OptimizerClass = nn.AdaBelief
+                elif adabelief == 'rms':
+                    lr = 5e-5
+                    OptimizerClass = nn.RMSprop
+                elif adabelief == 'adam':
+                    lr = 1e-5
+                    OptimizerClass = nn.Adam
+                else:
+                    raise Exception(f"Unknown adabelief type: {adabelief}")
+
                 if self.options['lr_dropout'] in ['y','cpu'] and not self.pretrain:
                     lr_cos = 500
                     lr_dropout = 0.3
                 else:
                     lr_cos = 0
                     lr_dropout = 1.0
-                OptimizerClass = nn.AdaBelief if adabelief else nn.RMSprop
                 clipnorm = 1.0 if self.options['clipgrad'] else 0.0
 
                 if 'df' in archi_type:
