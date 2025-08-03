@@ -1,4 +1,4 @@
-﻿import traceback
+import traceback
 import math
 import multiprocessing
 import operator
@@ -11,6 +11,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 from numpy import linalg as npla
+import subprocess
+import json
 
 import facelib
 from core import imagelib
@@ -768,6 +770,20 @@ def extract_next_batch(video_capture, start_time_ms, frame_interval, batch_size,
     
     return frame_batch
 
+def get_video_duration_ms(video_path):
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'format=duration',
+        '-of', 'json',
+        str(video_path)
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    metadata = json.loads(result.stdout.decode("utf-8"))
+    duration_sec = float(metadata["format"]["duration"])
+    return int(duration_sec * 1000)  # 返回毫秒
+
+
 
 def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only, manual_window_size, params):
     # 打开视频文件
@@ -775,7 +791,6 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
     if not video_capture.isOpened():
         io.log_err(f"无法打开视频文件: {input_path}")
         return
-    
 
     device_config = params['device_config']
     big_resolution_only = params['big_resolution_only']
@@ -794,13 +809,11 @@ def extract_face_without_pics(input_path, output_path, force_gpu_idxs, cpu_only,
 
     # 获取视频的总时长和帧率
     fps = int(video_capture.get(cv2.CAP_PROP_FPS))
+    duration_ms = get_video_duration_ms(str(input_path))
 
     # 命令行询问
-    start_time = params['start_time']
-    end_time = params['end_time']
-
-    start_time_ms = start_time * 1000
-    end_time_ms =  end_time * 1000
+    start_time_ms = params['start_time'] * 1000
+    end_time_ms = duration_ms - params['end_time'] * 1000
 
     if start_time_ms > end_time_ms:
         print('.....................')
@@ -916,9 +929,9 @@ def extract_faces_from_directory(input_dir, output_dir, force_gpu_idxs=None, cpu
 
     output_debug = io.input_bool(f"保存调试图片 Write debug images?", False)
 
-    all_start_time = io.input_int("请输入开始秒数", 90, valid_range=[0, 10000])
+    all_start_time = io.input_int("请输入片头秒数", 90, valid_range=[0, 10000])
     start_time = all_start_time
-    end_time = io.input_int("请输入结束秒数", 2400, valid_range=[start_time, 20000])
+    end_time = io.input_int("请输入片尾秒数", 150, valid_range=[0, 10000])
 
     frame_interval = io.input_int("每隔多少帧处理一次", 3, valid_range=[0, 10], help_message="每隔多少帧处理一次，0 - 每帧处理一次")
 
